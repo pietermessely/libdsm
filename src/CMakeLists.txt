@@ -1,6 +1,6 @@
 # pim: this is needed to create the file spnego_asn1.c
 execute_process(
-	COMMAND asn1Parser -o ${CMAKE_SOURCE_DIR}/contrib/spnego/spnego_asn1.c -n spnego_asn1_conf ${CMAKE_SOURCE_DIR}/contrib/spnego/spnego.asn1
+	COMMAND asn1Parser -o ${CMAKE_CURRENT_SOURCE_DIR}/../contrib/spnego/spnego_asn1.c -n spnego_asn1_conf ${CMAKE_CURRENT_SOURCE_DIR}/../contrib/spnego/spnego.asn1
 )
 
 set(SOURCES hmac_md5.c
