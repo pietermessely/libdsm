@@ -23,8 +23,13 @@ set(SOURCES hmac_md5.c
 
 include_directories(contrib)
 
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
+
 add_library(dsm ${SOURCES})
 target_link_libraries(dsm PUBLIC ${core_DEPENDS} ${CORE_LIBRARIES})
+target_link_libraries(dsm Threads::Threads)
 set_target_properties(dsm PROPERTIES
                            VERSION ${PROJECT_VERSION}
                            SOVERSION ${SOVERSION})
