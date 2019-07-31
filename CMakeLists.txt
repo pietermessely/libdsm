@@ -44,5 +44,5 @@ endif()
 
 add_subdirectory(src)
 
-install(DIRECTORY include
+install(DIRECTORY include/
         DESTINATION ${INSTALL_INC_DIR})
