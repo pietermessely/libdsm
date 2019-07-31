@@ -34,6 +34,10 @@
 #include "bdsm/smb_session.h"
 #include "bdsm/smb_file.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * @file smb_share.h
  * @brief List and connect to SMB shares
@@ -99,5 +103,9 @@ int             smb_tree_connect(smb_session *s, const char *name, smb_tid *tid)
  * @return 0 on success or a DSM error code in case of error
  */
 int             smb_tree_disconnect(smb_session *s, smb_tid tid);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

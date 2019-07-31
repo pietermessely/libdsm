@@ -38,6 +38,10 @@
 
 #define SMB_DEFAULT_BUFSIZE     (8192)
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 enum
 {
     /// SMB with Direct-TCP connection (OSX supports only this)
@@ -182,5 +186,9 @@ enum smb_session_supports_what
 #define DSM_ERROR_NT        (-2) /* see smb_session_get_nt_status */
 #define DSM_ERROR_NETWORK   (-3)
 #define DSM_ERROR_CHARSET   (-4)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

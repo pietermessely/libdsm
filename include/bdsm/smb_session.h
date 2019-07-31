@@ -35,6 +35,10 @@
 #include "bdsm/smb_defs.h"
 #include "bdsm/smb_types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * @file smb_session.h
  * @brief Functions to connect and authenticate to an SMB server
@@ -145,5 +149,8 @@ int             smb_session_supports(smb_session *s, int what);
  */
 uint32_t        smb_session_get_nt_status(smb_session *s);
 
+#ifdef __cplusplus
+}
+#endif
 
 #endif

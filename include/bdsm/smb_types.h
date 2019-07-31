@@ -47,6 +47,11 @@
 # undef  off_t
 # define off_t off64_t
 #endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
   * @struct smb_tid
   * @brief The id of a connection to a share within a session.
@@ -103,5 +108,9 @@ typedef smb_file *smb_stat_list;
  * @brief An opaque structure containing info about a file
  */
 typedef smb_file *smb_stat;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

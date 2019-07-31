@@ -54,6 +54,10 @@
 /// smb_stat_get() OP: Get file last moditification time
 #define SMB_STAT_MTIME        6
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * @brief Returns infos about files matching a pattern
  * @details This functions uses the FIND_FIRST2 SMB operations to list files
@@ -150,5 +154,9 @@ const char        *smb_stat_name(smb_stat info);
  * See each item documentation.
  */
 uint64_t          smb_stat_get(smb_stat info, int what);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

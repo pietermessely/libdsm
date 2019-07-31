@@ -33,6 +33,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * @file netbios_ns.h
  * @brief Netbios name service
@@ -150,5 +154,9 @@ int netbios_ns_discover_start(netbios_ns *ns, unsigned int broadcast_timeout,
  * @return 0 on success or -1 on failure
  */
 int netbios_ns_discover_stop(netbios_ns *ns);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

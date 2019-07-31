@@ -38,6 +38,9 @@
 
 #include "bdsm/smb_session.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /**
  * @brief remove a directory on a share.
@@ -60,5 +63,9 @@ int smb_directory_rm(smb_session *s, smb_tid tid, const char *path);
  * @return 0 on success or a DSM error code in case of error
  */
 int smb_directory_create(smb_session *s, smb_tid tid, const char *path);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

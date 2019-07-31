@@ -38,6 +38,9 @@
 
 #include "bdsm/smb_session.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /**
  * @brief Open a file on a share.
@@ -137,5 +140,9 @@ int  smb_file_rm(smb_session *s, smb_tid tid, const char *path);
  * @return 0 if move OK or -1 in case of error
  */
 int       smb_file_mv(smb_session *s, smb_tid tid, const char *old_path, const char *new_path);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
