@@ -26,10 +26,10 @@ include_directories(contrib)
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
-
 add_library(dsm ${SOURCES})
 target_link_libraries(dsm PUBLIC ${core_DEPENDS} ${CORE_LIBRARIES})
-target_link_libraries(dsm Threads::Threads)
+#target_link_libraries(dsm Threads::Threads)
+target_link_libraries(dsm "${CMAKE_THREAD_LIBS_INIT}")
 set_target_properties(dsm PROPERTIES
                            VERSION ${PROJECT_VERSION}
                            SOVERSION ${SOVERSION})
