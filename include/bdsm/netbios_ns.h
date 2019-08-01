@@ -46,6 +46,14 @@ typedef struct netbios_ns_entry netbios_ns_entry;
 typedef struct netbios_ns netbios_ns;
 
 /**
+ * Will return the amount of services a single node returned.
+ * This is used when you wish to iterate over all services of a node.
+ * @param entry
+ * @return
+ */
+uint32_t netbios_ns_entry_nr_services(netbios_ns_entry *entry);
+
+/**
  * @brief Get the name of the entry referenced by the iterator iter.
  * @details The pointer points to an area of memory owned by the netbios name
  * service
@@ -55,6 +63,15 @@ typedef struct netbios_ns netbios_ns;
 const char          *netbios_ns_entry_name(netbios_ns_entry *entry);
 
 /**
+ * Same like above, but iterates through all received services, not only the single one selected by the above method.
+ * Best is to first call the netbios_ns_entry_nr_services to get the max amount of idx to send
+ * @param entry
+ * @param idx
+ * @return
+ */
+const char * netbios_ns_entry_services_name(netbios_ns_entry *entry, int idx);
+
+/**
  * @brief Get the name of the entry referenced by the iterator iter.
  * @details The pointer points to an area of memory owned by the netbios name
  * service
@@ -62,6 +79,15 @@ const char          *netbios_ns_entry_name(netbios_ns_entry *entry);
  * @return A null-terminated ASCII string representing the group of a netbios machine.
  */
 const char          *netbios_ns_entry_group(netbios_ns_entry *entry);
+
+/**
+ * Same like above, but iterates through all received services, not only the single one selected by the above method.
+ * Best is to first call the netbios_ns_entry_nr_services to get the max amount of idx to send
+ * @param entry
+ * @param idx
+ * @return
+ */
+const char * netbios_ns_entry_services_group(netbios_ns_entry *entry, int idx);
 
 /**
  * @brief Return the IP address of the correspondance referenced by the iterator
@@ -78,6 +104,15 @@ uint32_t            netbios_ns_entry_ip(netbios_ns_entry *entry);
  * error occured.
  */
 char                netbios_ns_entry_type(netbios_ns_entry *entry);
+
+/**
+ * Same like above, but iterates through all received services, not only the single one selected by the above method.
+ * Best is to first call the netbios_ns_entry_nr_services to get the max amount of idx to send
+ * @param entry
+ * @param idx
+ * @return
+ */
+char netbios_ns_entry_services_type(netbios_ns_entry *entry, int idx);
 
 /**
  * @brief Allocate and initialize the Netbios name service client object.

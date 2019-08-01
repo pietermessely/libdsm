@@ -88,6 +88,19 @@ enum ns_entry_flag {
     NS_ENTRY_FLAG_VALID_NAME = 0x02,
 };
 
+typedef struct netbios_stat
+{
+    char                name[NETBIOS_NAME_LENGTH + 1];
+    char                group[NETBIOS_NAME_LENGTH + 1];
+    char                type;
+} netbios_stat;
+
+typedef struct netbios_all_stats
+{
+    uint32_t         nr_stats; // the amount of total stats received
+    netbios_stat *  all_nbstats; // all stats received
+} netbios_all_stats;
+
 struct netbios_ns_entry
 {
     TAILQ_ENTRY(netbios_ns_entry) next;
@@ -95,6 +108,7 @@ struct netbios_ns_entry
     char                          name[NETBIOS_NAME_LENGTH + 1];
     char                          group[NETBIOS_NAME_LENGTH + 1];
     char                          type;
+    netbios_all_stats*            allStats;
     int                           flag;
     time_t                        last_time_seen;
 };
@@ -134,6 +148,8 @@ struct netbios_ns_name_query
             const char *group;
             char type;
         } nbstat;
+
+        netbios_all_stats* allStats;
     }u;
 };
 
@@ -386,6 +402,18 @@ static int netbios_ns_send_name_query(netbios_ns *ns,
     return 0;
 }
 
+static void netbios_ns_copy_name(char *dest, const char *src)
+{
+    memcpy(dest, src, NETBIOS_NAME_LENGTH);
+    dest[NETBIOS_NAME_LENGTH] = 0;
+
+    for (int i = 1; i < NETBIOS_NAME_LENGTH; i++ )
+        if (dest[NETBIOS_NAME_LENGTH - i] == ' ')
+            dest[NETBIOS_NAME_LENGTH - i] = 0;
+        else
+            break;
+}
+
 static int netbios_ns_handle_query(netbios_ns *ns, size_t size,
                                    bool check_trn_id, uint32_t recv_ip,
                                    netbios_ns_name_query *out_name_query)
@@ -453,16 +481,23 @@ static int netbios_ns_handle_query(netbios_ns *ns, size_t size,
         if (data_length < name_count * 18)
             return -1;
 
+        netbios_all_stats * Temp = calloc(1, sizeof(netbios_all_stats));
+        Temp->all_nbstats =  calloc(name_count, sizeof(netbios_stat));
+        Temp->nr_stats = name_count;
+
         // first search for a group in the name list
         for (uint8_t name_idx = 0; name_idx < name_count; name_idx++)
         {
             const char *current_name = names + name_idx * 18;
             uint16_t current_flags = (current_name[16] << 8) | current_name[17];
-            if (current_flags & NETBIOS_NAME_FLAG_GROUP) {
+            if (current_flags & NETBIOS_NAME_FLAG_GROUP && group == NULL) {
                 group = current_name;
-                break;
             }
+            netbios_ns_copy_name(Temp->all_nbstats[name_idx].group, current_name);
+            //strcpy(out_name_query->u.all_nbstats[name_idx].group, current_name);
+            //out_name_query->u.all_nbstats[name_idx].group = current_name;
         }
+
         // then search for file servers
         for (uint8_t name_idx = 0; name_idx < name_count; name_idx++)
         {
@@ -472,13 +507,17 @@ static int netbios_ns_handle_query(netbios_ns *ns, size_t size,
 
             if (current_flags & NETBIOS_NAME_FLAG_GROUP)
                 continue;
-            if (current_type == NETBIOS_FILESERVER)
+
+            if (current_type == NETBIOS_FILESERVER && name == NULL) // we only save the name once
             {
                 name = current_name;
                 BDSM_dbg("netbios_ns_handle_query, Found name: '%.*s' in group: '%.*s'\n",
                          NETBIOS_NAME_LENGTH, name, NETBIOS_NAME_LENGTH, group);
-                break;
             }
+            netbios_ns_copy_name(Temp->all_nbstats[name_idx].name, current_name);
+            Temp->all_nbstats[name_idx].type = current_type;
+            //out_name_query->u.all_nbstats[name_idx].name = current_name;
+            //out_name_query->u.all_nbstats[name_idx].type = current_type;
         }
 
         if (name)
@@ -487,6 +526,7 @@ static int netbios_ns_handle_query(netbios_ns *ns, size_t size,
             out_name_query->u.nbstat.name = name;
             out_name_query->u.nbstat.group = group;
             out_name_query->u.nbstat.type = NETBIOS_FILESERVER;
+            out_name_query->u.allStats = Temp;
         }
     }
 
@@ -584,29 +624,16 @@ error:
     return -1;
 }
 
-static void netbios_ns_copy_name(char *dest, const char *src)
+static void netbios_ns_entry_set_data(netbios_ns_entry *entry, netbios_ns_name_query* qry)
 {
-    memcpy(dest, src, NETBIOS_NAME_LENGTH);
-    dest[NETBIOS_NAME_LENGTH] = 0;
+    if (qry->u.nbstat.name != NULL)
+        netbios_ns_copy_name(entry->name, qry->u.nbstat.name);
+    if (qry->u.nbstat.group != NULL)
+        netbios_ns_copy_name(entry->group, qry->u.nbstat.group);
 
-    for (int i = 1; i < NETBIOS_NAME_LENGTH; i++ )
-      if (dest[NETBIOS_NAME_LENGTH - i] == ' ')
-        dest[NETBIOS_NAME_LENGTH - i] = 0;
-      else
-        break;
-}
-
-static void netbios_ns_entry_set_name(netbios_ns_entry *entry,
-                                      const char *name, const char *group,
-                                      char type)
-{
-    if (name != NULL)
-        netbios_ns_copy_name(entry->name, name);
-    if (group != NULL)
-        netbios_ns_copy_name(entry->group, group);
-
-    entry->type = type;
+    entry->type = qry->u.nbstat.type;
     entry->flag |= NS_ENTRY_FLAG_VALID_NAME;
+    entry->allStats = qry->u.allStats; // We transfer responsibility here as well, so entry becomes responsible for erasure (is there a cleaner way?) //!<todo pim check
 }
 
 static netbios_ns_entry *netbios_ns_entry_add(netbios_ns *ns, uint32_t ip)
@@ -661,6 +688,12 @@ static void netbios_ns_entry_clear(netbios_ns *ns)
     {
         entry_next = TAILQ_NEXT(entry, next);
         TAILQ_REMOVE(&ns->entry_queue, entry, next);
+
+        if(entry->allStats->all_nbstats)
+            free(entry->allStats->all_nbstats);
+        if(entry->allStats)
+            free(entry->allStats);
+
         free(entry);
     }
 }
@@ -792,9 +825,7 @@ static netbios_ns_entry *netbios_ns_inverse_internal(netbios_ns *ns, uint32_t ip
 
     entry = netbios_ns_entry_add(ns, ip);
     if (entry)
-        netbios_ns_entry_set_name(entry, name_query.u.nbstat.name,
-                                  name_query.u.nbstat.group,
-                                  name_query.u.nbstat.type);
+        netbios_ns_entry_set_data(entry, &name_query);
     return entry;
 error:
     BDSM_perror("netbios_ns_inverse: ");
@@ -813,9 +844,27 @@ const char *netbios_ns_entry_name(netbios_ns_entry *entry)
     return entry ? entry->name : NULL;
 }
 
+const char * netbios_ns_entry_services_name(netbios_ns_entry *entry, int idx)
+{
+    if(entry && entry->allStats && entry->allStats->all_nbstats && idx < entry->allStats->nr_stats)
+    {
+        return entry->allStats->all_nbstats[idx].name;
+    }
+    return 0;
+}
+
 const char *netbios_ns_entry_group(netbios_ns_entry *entry)
 {
     return entry ? entry->group : NULL;
+}
+
+const char * netbios_ns_entry_services_group(netbios_ns_entry *entry, int idx)
+{
+    if(entry && entry->allStats && entry->allStats->all_nbstats && idx < entry->allStats->nr_stats)
+    {
+        return entry->allStats->all_nbstats[idx].group;
+    }
+    return 0;
 }
 
 uint32_t netbios_ns_entry_ip(netbios_ns_entry *entry)
@@ -823,9 +872,27 @@ uint32_t netbios_ns_entry_ip(netbios_ns_entry *entry)
     return entry ? entry->address.s_addr : 0;
 }
 
+uint32_t netbios_ns_entry_nr_services(netbios_ns_entry *entry)
+{
+    if(entry && entry->allStats)
+    {
+        return entry->allStats->nr_stats;
+    }
+    return 0;
+}
+
 char netbios_ns_entry_type(netbios_ns_entry *entry)
 {
     return entry ? entry->type : -1;
+}
+
+char netbios_ns_entry_services_type(netbios_ns_entry *entry, int idx)
+{
+    if(entry && entry->allStats && entry->allStats->all_nbstats && idx < entry->allStats->nr_stats)
+    {
+        return entry->allStats->all_nbstats[idx].type;
+    }
+    return -1;
 }
 
 static void *netbios_ns_discover_thread(void *opaque)
@@ -855,6 +922,12 @@ static void *netbios_ns_discover_thread(void *opaque)
                             ns->discover_callbacks.p_opaque, entry);
                 }
                 TAILQ_REMOVE(&ns->entry_queue, entry, next);
+
+                if(entry->allStats->all_nbstats)
+                    free(entry->allStats->all_nbstats);
+                if(entry->allStats)
+                    free(entry->allStats);
+
                 free(entry);
             }
         }
@@ -927,9 +1000,7 @@ static void *netbios_ns_discover_thread(void *opaque)
 
                 send_callback = !(entry->flag & NS_ENTRY_FLAG_VALID_NAME);
 
-                netbios_ns_entry_set_name(entry, name_query.u.nbstat.name,
-                                          name_query.u.nbstat.group,
-                                          name_query.u.nbstat.type);
+                netbios_ns_entry_set_data(entry, &name_query);
                 if (send_callback)
                     ns->discover_callbacks.pf_on_entry_added(
                             ns->discover_callbacks.p_opaque, entry);
