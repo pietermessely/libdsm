@@ -509,6 +509,8 @@ static int netbios_ns_handle_query(netbios_ns *ns, size_t size,
             char current_type = current_name[15];
             uint16_t current_flags = (current_name[16] << 8) | current_name[17];
 
+            Temp->all_nbstats[name_idx].type = current_type;
+
             if (current_flags & NETBIOS_NAME_FLAG_GROUP)
                 continue;
 
@@ -519,7 +521,6 @@ static int netbios_ns_handle_query(netbios_ns *ns, size_t size,
                          NETBIOS_NAME_LENGTH, name, NETBIOS_NAME_LENGTH, group);
             }
             netbios_ns_copy_name(Temp->all_nbstats[name_idx].name, current_name);
-            Temp->all_nbstats[name_idx].type = current_type;
             //out_name_query->u.all_nbstats[name_idx].name = current_name;
             //out_name_query->u.all_nbstats[name_idx].type = current_type;
         }
