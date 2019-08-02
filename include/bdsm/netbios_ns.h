@@ -190,6 +190,18 @@ int netbios_ns_discover_start(netbios_ns *ns, unsigned int broadcast_timeout,
  */
 int netbios_ns_discover_stop(netbios_ns *ns);
 
+/**
+ * @brief Perform statistics request for single IP Target
+ * @details Will request protocol statistics for NetBIOS for a single IP and return it over the callbacks.
+ * Will return once finished.
+ * @param ns The name service object.
+ * @param ip The ip of the target
+ * @param callbacks The callbacks previously setup by the
+ * caller
+ * @return 0 on success or -1 on failure
+ */
+int netbios_ns_request_statistics_single_ip_sync(netbios_ns *ns, uint32_t ip, netbios_ns_discover_callbacks *callbacks);
+
 #ifdef __cplusplus
 }
 #endif

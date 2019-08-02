@@ -1017,6 +1017,59 @@ static void *netbios_ns_discover_thread(void *opaque)
     return NULL;
 }
 
+static void *netbios_ns_request_statistics_single_ip_thread(void *opaque, uint32_t ip)
+{
+    netbios_ns *ns = (netbios_ns *) opaque;
+
+        if (netbios_ns_is_aborted(ns))
+            return NULL;
+
+        // send NBSTAT query
+        if (netbios_ns_send_name_query(ns, ip, NAME_QUERY_TYPE_NBSTAT,
+                                       name_query_broadcast, 0) == -1)
+            return NULL;
+
+        netbios_ns_name_query name_query;
+
+        struct timeval      timeout;
+        struct sockaddr_in  recv_addr;
+        int                 res;
+
+        timeout.tv_sec = ns->discover_broadcast_timeout;
+        timeout.tv_usec = 0;
+
+        // receive NB or NBSTAT answers
+        res = netbios_ns_recv(ns, ns->discover_broadcast_timeout == 0 ?
+                                  NULL : &timeout,
+                              &recv_addr,
+                              false, 0, &name_query);
+
+        // error or abort or timeout reached
+        if (res <= 0)
+            return NULL;
+
+        netbios_ns_entry  *entry = netbios_ns_entry_add(ns, ip);
+
+        netbios_ns_entry_set_data(entry, &name_query);
+        ns->discover_callbacks.pf_on_entry_added(ns->discover_callbacks.p_opaque, entry);
+
+        netbios_ns_entry_clear(ns);
+    return NULL;
+}
+
+int netbios_ns_request_statistics_single_ip_sync(netbios_ns *ns, uint32_t ip, netbios_ns_discover_callbacks *callbacks)
+{
+    if (ns->discover_started || !callbacks)
+        return -1;
+
+    ns->discover_callbacks = *callbacks;
+    ns->discover_broadcast_timeout = 4;
+
+    netbios_ns_request_statistics_single_ip_thread(ns, ip);
+
+    return 0;
+}
+
 int netbios_ns_discover_start(netbios_ns *ns,
                               unsigned int broadcast_timeout,
                               netbios_ns_discover_callbacks *callbacks)
