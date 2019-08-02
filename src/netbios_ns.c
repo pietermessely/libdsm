@@ -148,9 +148,8 @@ struct netbios_ns_name_query
             const char *group;
             char type;
         } nbstat;
-
-        netbios_all_stats* allStats;
     }u;
+    netbios_all_stats* allStats;
 };
 
 static int    ns_open_socket(netbios_ns *ns)
@@ -531,7 +530,7 @@ static int netbios_ns_handle_query(netbios_ns *ns, size_t size,
             out_name_query->u.nbstat.name = name;
             out_name_query->u.nbstat.group = group;
             out_name_query->u.nbstat.type = NETBIOS_FILESERVER;
-            out_name_query->u.allStats = Temp;
+            out_name_query->allStats = Temp;
         }
     }
 
@@ -638,7 +637,7 @@ static void netbios_ns_entry_set_data(netbios_ns_entry *entry, netbios_ns_name_q
 
     entry->type = qry->u.nbstat.type;
     entry->flag |= NS_ENTRY_FLAG_VALID_NAME;
-    entry->allStats = qry->u.allStats; // We transfer responsibility here as well, so entry becomes responsible for erasure (is there a cleaner way?) //!<todo pim check
+    entry->allStats = qry->allStats; // We transfer responsibility here as well, so entry becomes responsible for erasure (is there a cleaner way?) //!<todo pim check
 }
 
 static netbios_ns_entry *netbios_ns_entry_add(netbios_ns *ns, uint32_t ip)
