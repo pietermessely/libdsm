@@ -45,7 +45,9 @@
 #include "smb_share.h"
 #include "smb_file.h"
 
-int smb_tree_connect(smb_session *s, const char *name, smb_tid *tid)
+
+// as it was implemented initially
+static int smb_tree_connect_regular(smb_session *s, const char *name, smb_tid *tid)
 {
     smb_tree_connect_req  req;
     smb_tree_connect_resp *resp;
@@ -66,6 +68,10 @@ int smb_tree_connect(smb_session *s, const char *name, smb_tid *tid)
     path      = alloca(path_len);
     snprintf(path, path_len, "\\\\%s\\%s", s->srv.name, name);
     utf_path_len = smb_to_utf16(path, strlen(path) + 1, &utf_path);
+
+    for(int i=0; i<utf_path_len;++i)
+        printf("%c",utf_path[i]);
+    printf("\n");
 
     // Packet headers
     req_msg->packet->header.tid   = 0xffff; // Behavior of libsmbclient
@@ -118,6 +124,97 @@ int smb_tree_connect(smb_session *s, const char *name, smb_tid *tid)
 
     *tid = share->tid;
     return 0;
+}
+
+// some server however don't like the utf encoding
+static int smb_tree_connect_no_unicode(smb_session *s, const char *name, smb_tid *tid)
+{
+    smb_tree_connect_req  req;
+    smb_tree_connect_resp *resp;
+    smb_message            resp_msg;
+    smb_message           *req_msg;
+    smb_share             *share;
+    size_t                 path_len;
+    char                  *path;
+
+    assert(s != NULL && name != NULL && tid != NULL);
+
+    req_msg = smb_message_new(SMB_CMD_TREE_CONNECT);
+    if (!req_msg)
+        return DSM_ERROR_GENERIC;
+
+    // Build \\SERVER\Share path from name
+    path_len  = strlen(name) + strlen(s->srv.name) + 4;
+    path      = alloca(path_len);
+    snprintf(path, path_len, "\\\\%s\\%s", s->srv.name, name);
+
+    // Packet headers
+    req_msg->packet->header.tid   = 0xffff; // Behavior of libsmbclient
+
+    smb_message_set_andx_members(req_msg);
+
+    // Packet payload
+    SMB_MSG_INIT_PKT_ANDX(req);
+    req.wct          = 4;
+    req.flags        = 0x0c; // (??)
+    req.passwd_len   = 1;    // Null byte
+    req.bct = path_len + 6 + 1;
+    SMB_MSG_PUT_PKT(req_msg, req);
+
+    for(int i=0; i<path_len;++i)
+        printf("%c",path[i]);
+    printf("\n");
+
+    smb_message_put8(req_msg, 0); // Ze null byte password;
+    smb_message_append(req_msg, path, path_len);
+    smb_message_append(req_msg, "?????", strlen("?????") + 1);
+
+    if (!smb_session_send_msg_regular(s, req_msg))
+    {
+        smb_message_destroy(req_msg);
+        return DSM_ERROR_NETWORK;
+    }
+    smb_message_destroy(req_msg);
+
+    if (!smb_session_recv_msg(s, &resp_msg))
+        return DSM_ERROR_NETWORK;
+
+    if (!smb_session_check_nt_status(s, &resp_msg))
+        return DSM_ERROR_NT;
+
+    if (resp_msg.payload_size < sizeof(smb_tree_connect_resp))
+    {
+        BDSM_dbg("[smb_tree_connect]Malformed message\n");
+        return DSM_ERROR_NETWORK;
+    }
+
+    resp  = (smb_tree_connect_resp *)resp_msg.packet->payload;
+    share = calloc(1, sizeof(smb_share));
+    if (!share)
+        return DSM_ERROR_GENERIC;
+
+    share->tid          = resp_msg.packet->header.tid;
+    share->opts         = resp->opt_support;
+    share->rights       = resp->max_rights;
+    share->guest_rights = resp->guest_rights;
+
+    smb_session_share_add(s, share);
+
+    *tid = share->tid;
+    return 0;
+}
+
+int smb_tree_connect(smb_session *s, const char *name, smb_tid *tid)
+{
+    int ret = smb_tree_connect_regular(s, name, tid);
+
+    // If it fails, we try it without encoding since some implementation request this
+    if(ret < 0)
+    {
+        BDSM_perror("Couldn't connect with the tree regularly, will try without unicode ..");
+        ret = smb_tree_connect_no_unicode(s, name, tid);
+    }
+    return ret;
 }
 
 int           smb_tree_disconnect(smb_session *s, smb_tid tid)
@@ -249,57 +346,64 @@ void            smb_share_list_destroy(smb_share_list list)
     free(list);
 }
 
-// We should normally implement SCERPC and SRVSVC to perform a share list. But
-// since these two protocols have no other use for us, we'll do it the trash way
-// PS: Worst function _EVER_. I don't understand a bit myself
-int             smb_share_get_list(smb_session *s, smb_share_list *list, size_t *pcount)
+
+static int      smb_bind_optional_unicode(smb_session* s, smb_tid ipc_tid, smb_fd srvscv_fd, bool unicode)
 {
     smb_message           *req, resp;
-    smb_trans_req         trans;
-    smb_tid               ipc_tid;
-    smb_fd                srvscv_fd;
     uint16_t              rpc_len;
-    size_t                res, frag_len_cursor;
-    ssize_t               count;
-    int                   ret;
-
-    assert(s != NULL && list != NULL);
-    *list = NULL;
-
-    if ((ret = smb_tree_connect(s, "IPC$", &ipc_tid)) != DSM_SUCCESS)
-        return ret;
-
-    if ((ret = smb_fopen(s, ipc_tid, "\\srvsvc", SMB_MOD_READ | SMB_MOD_WRITE,
-                         &srvscv_fd)) != DSM_SUCCESS)
-        return ret;
-
-    //// Phase 1:
-    // We bind a context or whatever for DCE/RPC
+    smb_trans_req         trans;
 
     req = smb_message_new(SMD_CMD_TRANS);
     if (!req)
     {
-        ret = DSM_ERROR_GENERIC;
-        goto error;
+        return DSM_ERROR_GENERIC;
     }
+
     req->packet->header.tid = ipc_tid;
 
-    rpc_len = 0xffff;
+    if(unicode)
+    {
+        rpc_len = 0xffff;
+    }
+    else
+    {
+        rpc_len = 0x10B8;
+    }
+
     SMB_MSG_INIT_PKT(trans);
     trans.wct                    = 16;
     trans.total_data_count       = 72;
     trans.max_data_count         = rpc_len;
-    trans.param_offset           = 84;
+    if(unicode)
+    {
+        trans.param_offset           = 84;
+        trans.bct                    = 89;
+        trans.data_offset            = 84;
+    }
+    else
+    {
+        trans.param_offset           = 76;
+        trans.bct                    = 81;
+        trans.data_offset            = 76;
+    }
+
     trans.data_count             = 72;
-    trans.data_offset            = 84;
     trans.setup_count            = 2;
     trans.pipe_function          = 0x26;
     trans.fid                    = SMB_FD_FID(srvscv_fd);
-    trans.bct                    = 89;
+
     SMB_MSG_PUT_PKT(req, trans);
 
-    smb_message_put8(req, 0);   // Padding
-    smb_message_put_utf16(req, "\\PIPE\\", strlen("\\PIPE\\") + 1);
+    if(unicode)
+    {
+        smb_message_put8(req, 0);   // Padding
+        smb_message_put_utf16(req, "\\PIPE\\", strlen("\\PIPE\\") + 1);
+    }
+    else
+    {
+        smb_message_put_regular(req, "\\PIPE\\", strlen("\\PIPE\\") + 1);
+    }
+
     smb_message_put16(req, 0);  // Padding to be aligned with wtf boundary :-/
 
     // Now we'll 'build' the DCE/RPC Packet. This basically a copycat
@@ -331,12 +435,21 @@ int             smb_share_get_list(smb_session *s, smb_share_list *list, size_t 
     smb_message_put32(req, 2);    // Another version
 
     // Let's send this ugly pile of shit over the network !
-    res = smb_session_send_msg(s, req);
+
+    int res = DSM_ERROR_GENERIC;
+    if(unicode)
+    {
+        res = smb_session_send_msg(s, req);
+    }
+    else
+    {
+        res = smb_session_send_msg_regular(s, req);
+    }
+
     smb_message_destroy(req);
     if (!res)
     {
-        ret = DSM_ERROR_NETWORK;
-        goto error;
+        return DSM_ERROR_NETWORK;
     }
 
     // Is the server throwing pile of shit back at me ?
@@ -344,36 +457,51 @@ int             smb_share_get_list(smb_session *s, smb_share_list *list, size_t 
     if (resp.payload_size < 71)
     {
         BDSM_dbg("[smb_share_get_list]Malformed message\n");
-        ret = DSM_ERROR_NETWORK;
-        goto error;
+        return DSM_ERROR_NETWORK;
     }
 
     if (!res || resp.packet->payload[68])
     {
         BDSM_dbg("Bind call failed: 0x%hhx (reason = 0x%hhx)\n",
                  resp.packet->payload[68], resp.packet->payload[70]);
-        ret = DSM_ERROR_NETWORK;
-        goto error;
+        return DSM_ERROR_NETWORK;
     }
 
+    return DSM_SUCCESS;
+}
 
-    //// Phase 2:
-    // Now we have the 'bind' done (regarless of what it is), we'll call
-    // NetShareEnumAll
-
-    req = smb_message_new(SMD_CMD_TRANS);
-    if (!req)
+static int      smb_bind(smb_session* s, smb_tid ipc_tid, smb_fd srvscv_fd)
+{
+    int ret = smb_bind_optional_unicode(s, ipc_tid, srvscv_fd, true);
+    if(ret != DSM_SUCCESS)
     {
-        ret = DSM_ERROR_GENERIC;
-        goto error;
+        ret = smb_bind_optional_unicode(s, ipc_tid, srvscv_fd, false);
     }
+    return ret;
+}
+
+static int      smb_netshare_enum_all_optional_unicode(smb_session* s, smb_tid ipc_tid, smb_fd srvscv_fd, smb_message* response, bool unicode) {
+
+    smb_message *req = smb_message_new(SMD_CMD_TRANS);
+    if (!req) {
+        return DSM_ERROR_GENERIC;
+    }
+
     req->packet->header.tid = ipc_tid;
 
     // this struct will be set at the end when we know the data size
     SMB_MSG_ADVANCE_PKT(req, smb_trans_req);
 
-    smb_message_put8(req, 0);  // Padding
-    smb_message_put_utf16(req, "\\PIPE\\", strlen("\\PIPE\\") + 1);
+    if(unicode)
+    {
+        smb_message_put8(req, 0);  // Padding
+        smb_message_put_utf16(req, "\\PIPE\\", strlen("\\PIPE\\") + 1);
+    }
+    else
+    {
+        smb_message_put_regular(req, "\\PIPE\\", strlen("\\PIPE\\") + 1);
+    }
+
     smb_message_put16(req, 0); // Padding
 
     // Now we'll 'build' the DCE/RPC Packet. This basically a copycat
@@ -384,11 +512,21 @@ int             smb_share_get_list(smb_session *s, smb_share_list *list, size_t 
     smb_message_put8(req, 0x03);  // Packet flags = ??
     smb_message_put32(req, 0x10); // Representation = little endian/ASCII. Damn
     // Let's save the cursor here to update that later
-    frag_len_cursor = req->cursor;
+    size_t frag_len_cursor = req->cursor;
     smb_message_put16(req, 0);    // Data len again (frag length)
     smb_message_put16(req, 0);    // Auth len ?
-    smb_message_put32(req, 12);   // Call ID ?
-    smb_message_put32(req, 64);   // Alloc hint ?
+
+    if(unicode)
+    {
+        smb_message_put32(req, 12);   // Call ID ?
+        smb_message_put32(req, 64);   // Alloc hint ?
+    }
+    else
+    {
+        smb_message_put32(req, 2);   // Call ID ?
+        smb_message_put32(req, 76);   // Alloc hint ?
+    }
+
     smb_message_put16(req, 0);    // Context ID ?
     smb_message_put16(req, 15);   // OpNum = NetShareEnumAll
 
@@ -398,9 +536,23 @@ int             smb_share_get_list(smb_session *s, smb_share_list *list, size_t 
     smb_message_put32(req, 0);            // Offset
     smb_message_put32(req, strlen(s->srv.name) + 1);            // Actual count
     // The server name, supposed to be downcased
+
     smb_message_put_utf16(req, s->srv.name, strlen(s->srv.name) + 1);
     if ((strlen(s->srv.name) % 2) == 0) // It won't be aligned with the terminating byte
         smb_message_put16(req, 0);
+
+    /*
+    if(unicode)
+    {
+
+    }
+    else
+    {
+        smb_message_put_regular(req, s->srv.name, strlen(s->srv.name) + 1);
+        if ((strlen(s->srv.name) % 2) == 0) // It won't be aligned with the terminating byte
+            smb_message_put8(req, 0); // pim: uncertainty: this could be wrong here
+    }
+     */
 
     smb_message_put32(req, 1);            // Level 1 ?
     smb_message_put32(req, 1);            // Ctr ?
@@ -412,58 +564,140 @@ int             smb_share_get_list(smb_session *s, smb_share_list *list, size_t 
     smb_message_put32(req, 0);            // Resume ?
 
     // fill trans pkt at the end since we know the size at the end
+    smb_trans_req         trans;
     SMB_MSG_INIT_PKT(trans);
-    trans.wct              = 16;
-    trans.max_data_count   = 4280;
-    trans.setup_count      = 2;
-    trans.pipe_function    = 0x26; // TransactNmPipe;
-    trans.fid              = SMB_FD_FID(srvscv_fd);
-    trans.bct              = req->cursor - sizeof(smb_trans_req);
-    trans.data_count       = trans.bct - 17; // 17 -> padding + \PIPE\ + padding
+    trans.wct = 16;
+    trans.max_data_count = 4280;
+    trans.setup_count = 2;
+    trans.pipe_function = 0x26; // TransactNmPipe;
+    trans.fid = SMB_FD_FID(srvscv_fd);
+
+    size_t  S = sizeof(smb_trans_req);
+
+    trans.bct = req->cursor - sizeof(smb_trans_req);
+    trans.data_count = trans.bct - 17; // 17 -> padding + \PIPE\ + padding
+
+    if(unicode)
+    {
+        trans.data_offset = 84;
+        trans.param_offset = 84;
+    }
+    else
+    {
+        trans.data_count += strlen(s->srv.name);
+        trans.data_offset = 76;
+        trans.param_offset = 76;
+    }
+
     trans.total_data_count = trans.data_count;
-    trans.data_offset      = 84;
-    trans.param_offset     = 84;
+
     // but insert it at the begining
     SMB_MSG_INSERT_PKT(req, 0, trans);
 
     req->packet->payload[frag_len_cursor] = trans.data_count; // (data_count SHOULD stay < 256)
 
     // Let's send this ugly pile of shit over the network !
-    res = smb_session_send_msg(s, req);
-    smb_message_destroy(req);
-    if (!res)
+    int res = DSM_ERROR_GENERIC;
+
+    if(unicode)
     {
-        ret = DSM_ERROR_NETWORK;
-        goto error;
+        res = smb_session_send_msg(s, req);
+    }
+    else
+    {
+        res = smb_session_send_msg_regular(s, req);
+    }
+
+    smb_message_destroy(req);
+    if (!res) {
+        return DSM_ERROR_NETWORK;
     }
 
     // Is the server throwing pile of shit back at me ?
-    res = smb_session_recv_msg(s, &resp);
-    if (resp.payload_size < 4)
-    {
+    res = smb_session_recv_msg(s, response);
+    if (response->payload_size < 4) {
         BDSM_dbg("[smb_share_get_list]Malformed message\n");
-        ret = DSM_ERROR_NETWORK;
-        goto error;
+        return DSM_ERROR_NETWORK;
     }
 
-    if (!res && (uint32_t)resp.packet->payload[resp.payload_size - 4])
-    {
+    if (!res && (uint32_t) response->packet->payload[response->payload_size - 4]) {
         BDSM_dbg("NetShareEnumAll call failed.\n");
-        ret = DSM_ERROR_NETWORK;
-        goto error;
+        return DSM_ERROR_NETWORK;
     }
 
+    return DSM_SUCCESS;
+}
 
-    //// Phase 3
+static int      smb_netshare_enum_all(smb_session* s, smb_tid ipc_tid, smb_fd srvscv_fd, smb_message* response)
+{
+    int ret = smb_netshare_enum_all_optional_unicode(s, ipc_tid, srvscv_fd, response, true);
+    if(ret != DSM_SUCCESS)
+    {
+        ret = smb_netshare_enum_all_optional_unicode(s, ipc_tid, srvscv_fd, response, false);
+    }
+    return ret;
+}
+
+static int      smb_parse_list_of_shares(smb_message* response, smb_share_list *list, size_t *pcount)
+{
     // We parse the list of Share (finally !) and build function response
-    count = smb_share_parse_enum(&resp, list);
+    ssize_t count = smb_share_parse_enum(response, list);
     if (count == -1)
     {
-        ret = DSM_ERROR_GENERIC;
-        goto error;
+        return DSM_ERROR_GENERIC;
+
     }
     if (pcount != NULL)
         *pcount = count;
+
+    return DSM_SUCCESS;
+}
+
+
+
+
+// We should normally implement SCERPC and SRVSVC to perform a share list. But
+// since these two protocols have no other use for us, we'll do it the trash way
+// PS: Worst function _EVER_. I don't understand a bit myself
+int             smb_share_get_list(smb_session *s, smb_share_list *list, size_t *pcount)
+{
+    smb_tid               ipc_tid;
+    smb_fd                srvscv_fd;
+    int                   ret;
+
+    assert(s != NULL && list != NULL);
+    *list = NULL;
+
+    if ((ret = smb_tree_connect(s, "IPC$", &ipc_tid)) != DSM_SUCCESS)
+        return ret;
+
+    if ((ret = smb_fopen(s, ipc_tid, "\\srvsvc", SMB_MOD_READ | SMB_MOD_WRITE,
+                         &srvscv_fd)) != DSM_SUCCESS)
+        return ret;
+
+
+    //// Phase 1:
+    // We bind a context or whatever for DCE/RPC
+    if( (ret = smb_bind(s, ipc_tid, srvscv_fd)) != DSM_SUCCESS)
+    {
+        goto error;
+    }
+
+    //// Phase 2:
+    // Now we have the 'bind' done (regardless of what it is), we'll call
+    // NetShareEnumAll
+    smb_message resp;
+    if( (ret = smb_netshare_enum_all(s, ipc_tid, srvscv_fd, &resp)) != DSM_SUCCESS)
+    {
+        goto error;
+    }
+
+    //// Phase 3
+    if( (ret = smb_parse_list_of_shares(&resp, list, pcount)) != DSM_SUCCESS)
+    {
+        goto error;
+    }
+
     ret = DSM_SUCCESS;
 
 error:

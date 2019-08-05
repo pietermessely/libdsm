@@ -44,7 +44,7 @@
 #include "smb_file.h"
 #include "bdsm_debug.h"
 
-int         smb_fopen(smb_session *s, smb_tid tid, const char *path,
+int         smb_fopen_regular(smb_session *s, smb_tid tid, const char *path,
                       uint32_t o_flags, smb_fd *fd)
 {
     smb_share       *share;
@@ -143,6 +143,123 @@ int         smb_fopen(smb_session *s, smb_tid tid, const char *path,
 
     *fd = SMB_FD(tid, file->fid);
     return DSM_SUCCESS;
+}
+
+int smb_fopen_no_unicode(smb_session *s, smb_tid tid, const char *path,
+                                     uint32_t o_flags, smb_fd *fd)
+{
+    smb_share       *share;
+    smb_file        *file;
+    smb_message     *req_msg, resp_msg;
+    smb_create_req req;
+    smb_create_resp *resp;
+    size_t           path_len;
+    int              res;
+
+    assert(s != NULL && path != NULL && fd != NULL);
+
+    if ((share = smb_session_share_get(s, tid)) == NULL)
+        return DSM_ERROR_GENERIC;
+
+    path_len = strlen(path);
+
+    if (path_len == 0)
+        return DSM_ERROR_CHARSET;
+
+    req_msg = smb_message_new(SMB_CMD_CREATE);
+    if (!req_msg) {
+        //free(utf_path);
+        return DSM_ERROR_GENERIC;
+    }
+
+    // Set SMB Headers
+    req_msg->packet->header.tid = tid;
+
+    // Create AndX Params
+    SMB_MSG_INIT_PKT_ANDX(req);
+    req.wct            = 24;
+    req.flags          = 0;
+    req.root_fid       = 0;
+    req.access_mask    = o_flags;
+    req.alloc_size     = 0;
+    req.file_attr      = 0;
+    req.share_access   = SMB_SHARE_READ | SMB_SHARE_WRITE;
+    if ((o_flags & SMB_MOD_RW) == SMB_MOD_RW)
+    {
+        req.disposition    = SMB_DISPOSITION_FILE_SUPERSEDE; // Create if doesn't exist
+        req.create_opts    = SMB_CREATEOPT_WRITE_THROUGH;
+    }
+    else
+    {
+        req.disposition    = SMB_DISPOSITION_FILE_OPEN;  // Open and fails if doesn't exist
+        req.create_opts    = 0;                          // We dont't support create
+    }
+    req.impersonation  = SMB_IMPERSONATION_SEC_IMPERSONATE;
+    req.security_flags = SMB_SECURITY_NO_TRACKING;
+    req.path_length    = path_len;
+    req.bct            = path_len + 1;
+    SMB_MSG_PUT_PKT(req_msg, req);
+
+    // Create AndX 'Body'
+    //smb_message_put8(req_msg, 0);   // Align beginning of path
+    smb_message_append(req_msg, path, path_len);
+    smb_message_put8(req_msg, 0);   // Align beginning of path
+    //free(utf_path);
+
+    // smb_message_put16(req_msg, 0);  // ??
+
+    res = smb_session_send_msg_regular(s, req_msg);
+    smb_message_destroy(req_msg);
+    if (!res)
+        return DSM_ERROR_NETWORK;
+
+    if (!smb_session_recv_msg(s, &resp_msg))
+        return DSM_ERROR_NETWORK;
+    if (!smb_session_check_nt_status(s, &resp_msg))
+        return DSM_ERROR_NT;
+
+    if (resp_msg.payload_size < sizeof(smb_create_resp))
+    {
+        BDSM_dbg("[smb_fopen]Malformed message.\n");
+        return DSM_ERROR_NETWORK;
+    }
+
+    resp = (smb_create_resp *)resp_msg.packet->payload;
+    file = calloc(1, sizeof(smb_file));
+    if (!file)
+        return DSM_ERROR_GENERIC;
+
+
+    file->fid           = resp->fid;
+    file->tid           = tid;
+    file->created       = resp->created;
+    file->accessed      = resp->accessed;
+    file->written       = resp->written;
+    file->changed       = resp->changed;
+    file->alloc_size    = resp->alloc_size;
+    file->size          = resp->size;
+    file->attr          = resp->attr;
+    file->is_dir        = resp->is_dir;
+
+    smb_session_file_add(s, tid, file); // XXX Check return
+
+    *fd = SMB_FD(tid, file->fid);
+    return DSM_SUCCESS;
+}
+
+
+int         smb_fopen(smb_session *s, smb_tid tid, const char *path,
+                      uint32_t o_flags, smb_fd *fd)
+{
+    int ret = smb_fopen_regular(s, tid, path, o_flags, fd);
+
+    if(ret < 0)
+    {
+        BDSM_perror("Couldn't open with the share regularly, will try without unicode ..");
+        ret = smb_fopen_no_unicode(s, tid, path, o_flags, fd);
+    }
+
+    return ret;
 }
 
 void        smb_fclose(smb_session *s, smb_fd fd)

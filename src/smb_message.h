@@ -48,6 +48,8 @@ int             smb_message_put32(smb_message *msg, uint32_t data);
 int             smb_message_put64(smb_message *msg, uint64_t data);
 size_t          smb_message_put_utf16(smb_message *msg, const char *str,
                                       size_t str_len);
+size_t          smb_message_put_regular(smb_message *msg, const char *str,
+                                      size_t str_len);
 int             smb_message_put_uuid(smb_message *msg, uint32_t a, uint16_t b,
                                      uint16_t c, const uint8_t e[8]);
 

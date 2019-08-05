@@ -36,6 +36,11 @@
 // Send a smb message for the provided smb_session
 int             smb_session_send_msg(smb_session *s, smb_message *msg);
 
+// same like above, but will send everything non-unicode and will disable special security features (like flag2: extended security negotiation: this will allow older servers to respond)
+int             smb_session_send_msg_regular(smb_session *s, smb_message *msg);
+
+
+
 // msg->packet will be updated to point on received data. You don't own this
 // memory. It'll be reused on next recv_msg
 size_t          smb_session_recv_msg(smb_session *s, smb_message *msg);

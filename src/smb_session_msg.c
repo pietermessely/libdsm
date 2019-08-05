@@ -47,7 +47,31 @@ int             smb_session_send_msg(smb_session *s, smb_message *msg)
 
     msg->packet->header.flags   = 0x18;
     msg->packet->header.flags2  = 0xc843;
-    // msg->packet->header.flags2  = 0xc043; // w/o extended security;
+    //msg->packet->header.flags2  = 0xc043; // w/o extended security;
+    msg->packet->header.uid = s->srv.uid;
+
+    s->transport.pkt_init(s->transport.session);
+
+    pkt_sz = sizeof(smb_packet) + msg->cursor;
+    if (!s->transport.pkt_append(s->transport.session, (void *)msg->packet, pkt_sz))
+        return 0;
+    if (!s->transport.send(s->transport.session))
+        return 0;
+
+    return 1;
+}
+
+
+int             smb_session_send_msg_regular(smb_session *s, smb_message *msg)
+{
+    size_t        pkt_sz;
+
+    assert(s != NULL);
+    assert(s->transport.session != NULL);
+    assert(msg != NULL && msg->packet != NULL);
+
+    msg->packet->header.flags   = 0x18;
+    msg->packet->header.flags2  = 0x0043; // w/o extended security and w/o unicode
     msg->packet->header.uid = s->srv.uid;
 
     s->transport.pkt_init(s->transport.session);
