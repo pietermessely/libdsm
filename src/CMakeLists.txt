@@ -1,4 +1,4 @@
-# pim: this is needed to create the file spnego_asn1.c (apt-get install libtasn1-bin)
+# pim: this is needed to create the file spnego_asn1.c (apt-get install libtasn1-dev)
 execute_process(
 	COMMAND asn1Parser -o ${CMAKE_CURRENT_SOURCE_DIR}/../contrib/spnego/spnego_asn1.c -n spnego_asn1_conf ${CMAKE_CURRENT_SOURCE_DIR}/../contrib/spnego/spnego.asn1
 )
